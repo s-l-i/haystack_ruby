@@ -11,19 +11,24 @@ module HaystackRuby
           @user = user
           @url = url
           @nonce = SecureRandom.base64.tr('=','') #TODO check if problem to potentially strip =
-          @digest = OpenSSL::Digest::SHA256.new 
-          @handshake_token = Base64.strict_encode64(@user.username)
+          @digest = OpenSSL::Digest::SHA256.new
+          @handshake_token = Base64.urlsafe_encode64(@user.username, padding: false)
         end
 
         def authorize
+          res = send_hello
+          parse_hello(res)
+
           res = send_first_message
           parse_first_response(res)
+
           res = send_second_message
           parse_second_response(res)
         end
 
-        def connection 
-          @connection ||= Faraday.new(:url => @url) do |faraday|
+        def connection
+          @connection ||= Faraday.new(:url => @url, :ssl => { :verify => false }) do |faraday|
+
             # faraday.response :logger                  # log requests to STDOUT
             faraday.adapter  Faraday.default_adapter  # make requests with Net::HTTP
             faraday.headers['Accept'] = 'application/json' #TODO enable more formats
@@ -31,17 +36,49 @@ module HaystackRuby
           end
         end
 
+        # hello message by client to server
+        def send_hello
+          res = connection.get('about') do |req|
+            req.headers['Authorization'] = "HELLO username=#{@handshake_token}"
+          end
+        end
+
+        # verify valid server response and hash
+        def parse_hello(response)
+          if response.status == 400
+            throw "Error from server: #{response.reason_phrase}"
+          end
+
+          # parse server response to first message
+          response_str = response.env.response_headers['www-authenticate']
+          unless response_str.index('scram ') == 0
+            throw 'Invalid response from server'
+          end
+
+          response_str.slice! 'scram '
+          response_vars = {}
+          response_str.split(', ').each do |pair|
+            key,value = pair.split('=')
+            response_vars[key] = value
+          end
+
+          unless response_vars['hash'] == 'SHA-256'
+            throw "Server requested unsupported hash algorithm: #{response_vars['hash']}"
+          end
+        end
+
         # first message sent by client to server
         def send_first_message
-          res = connection.get('about') do |req|
-            req.headers['Authorization'] = "SCRAM handshakeToken=#{@handshake_token},data=#{Base64.urlsafe_encode64(first_message).tr('=','')}"
+          connection.get('about') do |req|
+            req.headers['Authorization'] = "SCRAM handshakeToken=#{@handshake_token},data=#{Base64.urlsafe_encode64(first_message, padding: false)}"
           end
-          res
-          
         end
 
         # pull server data out of response to first message
         def parse_first_response(response)
+          if response.status == 400
+            throw "Error from server: #{response.reason_phrase}"
+          end
 
           # parse server response to first message
           response_str = response.env.response_headers['www-authenticate']
@@ -73,10 +110,10 @@ module HaystackRuby
 
         def send_second_message
           res = connection.get('about') do |req|
-            req.headers['Authorization'] = "SCRAM handshakeToken=#{@handshake_token},data=#{Base64.strict_encode64(client_final).tr('=','')}"
+            req.headers['Authorization'] = "SCRAM handshakeToken=#{@handshake_token},data=#{Base64.urlsafe_encode64(client_final, padding: false)}"
           end
           res
-          
+
         end
         def parse_second_response(response)
           begin
@@ -87,9 +124,7 @@ module HaystackRuby
               response_vars[key] = value
             end
             # decode data attribute to check server signature is as expected
-            key,val = Base64.decode64(response_vars['data']).split('=')
-            response_vars[key] = val
-            server_sig = response_vars['v']
+            key,server_sig = Base64.decode64(response_vars['data']).split('=')
             unless server_sig == expected_server_signature
               throw "invalid signature from server"
             end
@@ -97,7 +132,7 @@ module HaystackRuby
           # rescue Exception => e
           #   raise
           end
-          
+
         end
 
         def test_auth_token
@@ -108,7 +143,7 @@ module HaystackRuby
 
         private
 
-# utility methods, closely matched with SCRAM notation and algorithm overview here: 
+# utility methods, closely matched with SCRAM notation and algorithm overview here:
 # https://tools.ietf.org/html/rfc5802#section-3
 
         def auth_message
@@ -125,7 +160,7 @@ module HaystackRuby
         end
 
         def client_proof(key, signature)
-          @client_proof ||= Base64.strict_encode64(xor(key, signature))
+          @client_proof ||= Base64.urlsafe_encode64(xor(key, signature))
         end
 
         def client_signature(key, message)
@@ -150,9 +185,9 @@ module HaystackRuby
 
         def hi(data)
           OpenSSL::PKCS5.pbkdf2_hmac(
-            data, 
-            Base64.decode64(@server_salt), 
-            @server_iterations, 
+            data,
+            Base64.decode64(@server_salt),
+            @server_iterations,
             @digest.digest_length,
             @digest
           )

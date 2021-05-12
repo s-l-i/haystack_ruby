@@ -3,7 +3,7 @@ module HaystackRuby
   require 'pp'
   # may consider making this a mixin instead
   class Project
-    
+
     attr_accessor :name, :haystack_version, :url #required
     def initialize(name, config)
       @name = name
@@ -35,7 +35,7 @@ module HaystackRuby
     end
 
 
-    # for now, setting up to have a single connection per project 
+    # for now, setting up to have a single connection per project
     def connection
       # if @credentials.nil? && @auth_token.nil?
       #   authorize #will either set auth token or raise error
@@ -133,9 +133,9 @@ module HaystackRuby
         p[:value]
       end
       grid << values.join(',')
-      res = commit grid 
+      res = commit grid
       # return id of new rec
-      res['rows'][0]['id']     
+      res['rows'][0]['id']
     end
 
 # TODO fix these.  weird sensitivities around mod timestamp (format and time)
@@ -155,9 +155,9 @@ module HaystackRuby
 
     def remove_rec id
       grid = ["ver:\"#{@haystack_version}\" commit:\"remove\""]
-      grid << 'id,mod' 
+      grid << 'id,mod'
       grid << "#{id},#{DateTime.now}"
-      commit grid      
+      commit grid
     end
     private
 
